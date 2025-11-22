@@ -1,0 +1,446 @@
+#!/bin/sh
+
+_db_version="directory_binder 0.1
+Directory Binder
+Written by Mattéo Baussart.
+"
+
+_db_usage="Usage: directory_binder [OPTION...] COMMAND [ARG...]
+Bind/restore directories to/from names.
+
+Options:
+  -h, --help        Display this help and exit
+  -q, --quiet       Suppress standard output; does not affect command 'list'
+  -s, --save        Location of saved bindings (default '~/.local/state/directory_binder')
+  -v, --version     Print version information and exit
+
+Commands:
+  a[dd]         Add a binding
+  d[elete]      Delete bindings
+  l[ist]        List bindings
+  r[estore]     Restore current working directory from binding
+
+Exit status:
+  0     No error occured
+  1     Error occured during execution
+  2     Invalid usage of command-line options/arguments
+
+Run 'directory_binder COMMAND --help' for more information on a command.
+"
+
+_db_add_usage="Usage: directory_binder add [OPTION...] [NAME]
+Bind NAME (default '.default') to the current working directory.
+
+Options:
+  -h, --help    Display this help and exit
+
+Exit status:
+  0     No error occured
+  1     Error occured during execution
+  2     Invalid usage of command-line options/arguments
+
+Run 'directory_binder --help' for more general information.
+"
+
+_db_delete_usage="Usage: directory_binder delete [OPTION...] [NAME...]
+Delete binding(s) specified by NAME.
+
+Options:
+  -a, --all         Delete all bindings; implies --confirm
+  -b, --broken      Delete all broken bindings; implies --confirm
+  -c, --confirm     Prompt before deleting each binding
+  -C, --no-confirm  Do not prompt (default)
+  -h, --help        Display this help and exit
+
+Exit status:
+  0     No error occured
+  1     Error occured during execution
+  2     Invalid usage of command-line options/arguments
+
+Run 'directory_binder --help' for more general information.
+"
+
+_db_list_usage="Usage: directory_binder list [OPTION...]
+List all existing bindings.
+
+Options:
+  -h, --help    Display this help and exit
+
+Exit status:
+  0     No error occured
+  1     Error occured during execution
+  2     Invalid usage of command-line options/arguments
+
+Run 'directory_binder --help' for more general information.
+"
+
+_db_restore_usage="Usage: directory_binder add [OPTION...] [NAME]
+Bind NAME (default '.default') to the current working directory.
+
+Options:
+  -h, --help    Display this help and exit
+
+Exit status:
+  0     No error occured
+  1     Error occured during execution
+  2     Invalid usage of command-line options/arguments
+
+Run 'directory_binder --help' for more general information.
+"
+
+_db() {
+    _db_opt_quiet=0
+    _db_opt_save=~/.local/state/directory_binder
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -h | --help)
+                printf "%s" "${_db_usage}"
+                return 0;;
+            -q | --quiet)
+                _db_opt_quiet=1
+                shift;;
+            -s | --save)
+                if [ "$#" -lt 2 ]; then
+                    >&2 printf "directory_binder: Option '%s' requires an argument.\n" "$1"
+                    >&2 printf "Try 'directory_binder --help' for help.\n"
+                    return 2
+                fi
+                _db_opt_save="$2"
+                shift 2;;
+            -v | --version)
+                printf "%s" "${_db_version}"
+                return 0;;
+            -*)
+                >&2 printf "directory_binder: Unknown option: %s\n" "$1"
+                >&2 printf "Try 'directory_binder --help' for help.\n"
+                return 2;;
+            *)
+                break;;
+        esac
+    done
+
+    if [ "$#" -eq 0 ]; then
+        printf "%s" "${_db_usage}"
+        return 2
+    fi
+
+    case "$1" in
+        a | add)
+            shift
+            _db_add "$@";;
+        d | delete)
+            shift
+            _db_delete "$@";;
+        l | list)
+            shift
+            _db_list "$@";;
+        r | restore)
+            shift
+            _db_restore "$@";;
+        *)
+            >&2 printf "directory_binder: Unknown command: %s\n" "$1"
+            >&2 printf "Try 'directory_binder --help' for help.\n"
+            return 2;;
+    esac
+}
+
+_db_add() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -h | --help)
+                printf "%s" "${_db_add_usage}"
+                return 0;;
+            --)
+                shift
+                break;;
+            -*)
+                >&2 printf "directory_binder add: Unknown option: %s\n" "$1"
+                >&2 printf "Try 'directory_binder add --help' for help.\n"
+                return 2;;
+            *)
+                break;;
+        esac
+    done
+
+    if [ "$#" -eq 0 ]; then
+        _db_name='.default'
+    elif [ "$#" -eq 1 ]; then
+        _db_name="$1"
+    else
+        >&2 printf "directory_binder add: Too many arguments\n"
+        >&2 printf "Try 'directory_binder add --help' for help.\n"
+        return 2
+    fi
+
+    case "${_db_name}" in
+        . | .. | */*)
+            >&2 printf "directory_binder add: NAME cannot match '.', '..', or '*/*' (got '%s').\n" "${_db_name}"
+            return 2;;
+    esac
+
+    if [ ! -d "${_db_opt_save}" ]; then
+        if ! 'mkdir' -p -- "${_db_opt_save}"; then
+            return 1
+        fi
+    fi
+
+    if ! printf "%s\n" "${PWD}" > "${_db_opt_save}/${_db_name}"; then
+        return 1
+    fi
+
+    if [ "${_db_opt_quiet}" -eq 0 ]; then
+        printf "%-15s %s\n" "${_db_name}" "${PWD}"
+    fi
+}
+
+_db_delete() {
+    _db_delete_opt_which='list'
+    _db_delete_opt_confirm=-1
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -h | --help)
+                printf "%s" "${_db_delete_usage}"
+                return 0;;
+            -a | --all)
+                _db_delete_opt_which='all'
+                shift;;
+            -b | --broken)
+                _db_delete_opt_which='broken'
+                shift;;
+            -c | --confirm)
+                _db_delete_opt_confirm=1
+                shift;;
+            -C | --no-confirm)
+                _db_delete_opt_confirm=0
+                shift;;
+            --)
+                shift
+                break;;
+            -*)
+                >&2 printf "directory_binder delete: Unknown option: %s\n" "$1"
+                >&2 printf "Try 'directory_binder delete --help' for help.\n"
+                return 2;;
+            *)
+                break;;
+        esac
+    done
+
+    if [ "${_db_delete_opt_confirm}" -eq -1 ]; then
+        if [ "${_db_delete_opt_which}" = 'list' ]; then
+            _db_delete_opt_confirm=0
+        else # 'all', 'broken'
+            _db_delete_opt_confirm=1
+        fi
+    fi
+
+    if [ "${_db_delete_opt_which}" = 'list' ]; then
+        if [ "$#" -eq 0 ]; then
+            >&2 printf "directory_binder delete: Missing NAME... or --all/--broken\n"
+            >&2 printf "Try 'directory_binder delete --help' for help.\n"
+            return 2
+        fi
+    else # 'all', 'broken'
+        if [ "$#" -gt 0 ]; then
+            >&2 printf "directory_binder delete: NAME... cannot be provided with --all/--broken.\n"
+            >&2 printf "Try 'directory_binder delete --help' for help.\n"
+            return 2
+        fi
+    fi
+
+    _db_error=0
+
+    if [ "${_db_delete_opt_which}" = 'list' ]; then
+        while [ "$#" -gt 0 ]; do
+            _db_name="$1"
+            shift
+
+            case "${_db_name}" in
+                . | .. | */*)
+                    >&2 printf "directory_binder delete: NAME cannot match '.', '..', or '*/*' (got '%s').\n" "${_db_name}"
+                    _db_error=1
+                    continue;;
+            esac
+
+            _db_file="${_db_opt_save}/${_db_name}"
+            if [ ! -f "${_db_file}" -o ! -r "${_db_file}" ]; then
+                >&2 printf "directory_binder delete: Unknown NAME: '%s'\n" "${_db_name}"
+                _db_error=1
+                continue
+            fi
+
+            _db_path="$('cat' -- "${_db_file}")"
+
+            if [ "${_db_delete_opt_confirm}" -eq 1 ]; then
+                >&2 printf "directory_binder delete: Delete binding %s -> %s? y(es)/[n(o)]/a(ll)/q(uit) " "${_db_name}" "${_db_path}"
+                if ! IFS='' read -r _db_confirm; then
+                    printf "\n"
+                    continue
+                fi
+                case "${_db_confirm}" in
+                    [yY] | [yY][eE][sS])
+                        ;;
+                    [aA] | [aA][lL][lL])
+                        _db_delete_opt_confirm=0
+                        ;;
+                    [qQ] | [qQ][uU][iI][tT])
+                        break;;
+                    *)
+                        continue;;
+                esac
+            fi
+
+            if ! 'rm' -- "${_db_file}"; then
+                >&2 printf "directory_binder delete: Failed to delete: %s\n" "${_db_name}"
+                _db_error=1
+                continue
+            fi
+
+            if [ "${_db_opt_quiet}" -eq 0 ]; then
+                printf "%s\t%s\n" "${_db_name}" "${_db_path}"
+            fi
+        done
+    else # 'all', 'broken'
+        if [ ! -d "${_db_opt_save}" -o ! -x "${_db_opt_save}" ]; then
+            return 0
+        fi
+
+        for _db_file in "${_db_opt_save}"/* "${_db_opt_save}"/.*; do
+            if [ ! -f "${_db_file}" -o ! -r "${_db_file}" ]; then
+                continue
+            fi
+
+            _db_name="${_db_file##*/}"
+            _db_path="$('cat' -- "${_db_file}")"
+
+            if [ "${_db_delete_opt_which}" = 'broken' ]; then
+                if [ -d "${_db_path}" -a -x "${_db_path}" ]; then
+                    continue
+                fi
+            fi
+
+            if [ "${_db_delete_opt_confirm}" -eq 1 ]; then
+                >&2 printf "directory_binder delete: Delete binding %s -> %s? y(es)/[n(o)]/a(ll)/q(uit) " "${_db_name}" "${_db_path}"
+                if ! IFS='' read -r _db_confirm; then
+                    printf "\n"
+                    continue
+                fi
+                case "${_db_confirm}" in
+                    [yY] | [yY][eE][sS])
+                        ;;
+                    [aA] | [aA][lL][lL])
+                        _db_delete_opt_confirm=0
+                        ;;
+                    [qQ] | [qQ][uU][iI][tT])
+                        break;;
+                    *)
+                        continue;;
+                esac
+            fi
+
+            if ! 'rm' -- "${_db_file}"; then
+                >&2 printf "directory_binder delete: Failed to delete: %s\n" "${_db_name}"
+                _db_error=1
+                continue
+            fi
+
+            if [ "${_db_opt_quiet}" -eq 0 ]; then
+                printf "%s\t%s\n" "${_db_name}" "${_db_path}"
+            fi
+        done
+    fi
+
+    return "${_db_error}"
+}
+
+_db_list() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -h | --help)
+                printf "%s" "${_db_list_usage}"
+                return 0;;
+            -*)
+                >&2 printf "directory_binder list: Unknown option: %s\n" "$1"
+                >&2 printf "Try 'directory_binder list --help' for help.\n"
+                return 2;;
+            *)
+                break;;
+        esac
+    done
+
+    if [ "$#" -gt 0 ]; then
+        >&2 printf "directory_binder list: Too many arguments\n"
+        >&2 printf "Try 'directory_binder list --help' for help.\n"
+        return 2
+    fi
+
+    if [ ! -d "${_db_opt_save}" -o ! -x "${_db_opt_save}" ]; then
+        return 0
+    fi
+
+    for _db_file in "${_db_opt_save}"/* "${_db_opt_save}"/.*; do
+        if [ ! -f "${_db_file}" -o ! -r "${_db_file}" ]; then
+            continue
+        fi
+
+        _db_name="${_db_file##*/}"
+        _db_path="$('cat' -- "${_db_file}")"
+
+        if [ -d "${_db_path}" -a -x "${_db_path}" ]; then
+            printf "  %-15s %s\n" "${_db_name}" "${_db_path}"
+        else
+            printf "B %-15s %-15s\n" "${_db_name}" "${_db_path}"
+        fi
+    done
+}
+
+_db_restore() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -h | --help)
+                printf "%s" "${_db_restore_usage}"
+                return 0;;
+            -*)
+                >&2 printf "directory_binder restore: Unknown option: %s\n" "$1"
+                >&2 printf "Try 'directory_binder restore --help' for help.\n"
+                return 2;;
+            *)
+                break;;
+        esac
+    done
+
+    if [ "$#" -eq 0 ]; then
+        _db_name='.default'
+    elif [ "$#" -eq 1 ]; then
+        _db_name="$1"
+    else
+        >&2 printf "directory_binder restore: Too many arguments\n"
+        >&2 printf "Try 'directory_binder restore --help' for help.\n"
+        return 2
+    fi
+
+    _db_file="${_db_opt_save}/${_db_name}"
+    if [ ! -f "${_db_file}" -o ! -r "${_db_file}" ]; then
+        >&2 printf "directory_binder restore: Unknown NAME: '%s'\n" "${_db_name}"
+        return 1
+    fi
+
+    _db_path="$('cat' -- "${_db_file}")"
+
+    if [ ! -d "${_db_path}" -o ! -x "${_db_path}" ]; then
+        >&2 printf "directory_binder restore: Broken NAME: %s\n" "${_db_name}"
+        >&2 printf "Binds to: '%s'\n" "${_db_path}"
+        return 1
+    fi
+
+    'cd' -- "${_db_path}"
+
+    if [ "${_db_opt_quiet}" -eq 0 ]; then
+        printf "%s\t%s\n" "${_db_name}" "${_db_path}"
+    fi
+}
+
+directory_binder() {
+    _db "$@"
+}
